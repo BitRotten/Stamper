@@ -1,11 +1,11 @@
-// Check if our overlay already exists to prevent duplicates
-if (!document.getElementById('livestream-stamper-overlay')) {
+// We attach our app to the 'window' object so we can refresh data without re-injecting the UI
+if (!window.stamperProInitialized) {
+    window.stamperProInitialized = true;
     
     // 1. Build the Modern Container UI
     const container = document.createElement('div');
     container.id = 'livestream-stamper-overlay';
     
-    // Modern Glassmorphism & Bottom Positioning
     container.style.cssText = `
         position: fixed;
         bottom: 20px;
@@ -27,7 +27,6 @@ if (!document.getElementById('livestream-stamper-overlay')) {
         transition: opacity 0.2s ease-in-out;
     `;
 
-    // Reorganized HTML: Capture button moved below the list
     container.innerHTML = `
         <div id="lso-header" style="background: rgba(248, 250, 252, 0.6); padding: 14px 16px; border-bottom: 1px solid rgba(0,0,0,0.05); border-radius: 16px 16px 0 0; display:flex; justify-content:space-between; align-items:center; cursor: grab; user-select: none;">
             <div style="display:flex; gap: 15px; align-items:center;">
@@ -49,7 +48,7 @@ if (!document.getElementById('livestream-stamper-overlay')) {
 
     document.body.appendChild(container);
 
-    // 2. Advanced Dragging Logic
+    // 2. Dragging Logic
     const header = document.getElementById('lso-header');
     let isDragging = false;
     let offsetX, offsetY;
@@ -58,13 +57,11 @@ if (!document.getElementById('livestream-stamper-overlay')) {
         isDragging = true;
         header.style.cursor = 'grabbing';
         const rect = container.getBoundingClientRect();
-        
         container.style.width = rect.width + 'px';
         container.style.bottom = 'auto';
         container.style.right = 'auto';
         container.style.left = rect.left + 'px';
         container.style.top = rect.top + 'px';
-
         offsetX = clientX - rect.left;
         offsetY = clientY - rect.top;
     };
@@ -99,73 +96,102 @@ if (!document.getElementById('livestream-stamper-overlay')) {
     document.addEventListener('mouseup', endDrag);
     document.addEventListener('touchend', endDrag);
 
-    // 3. State & Logic
-    let timestamps = [];
+    // 3. State & App Logic
+    window.stamperPro = {
+        timestamps: [],
+        pageKey: '',
 
-    function formatTime(seconds) {
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        const formattedM = m.toString().padStart(2, '0');
-        const formattedS = s.toString().padStart(2, '0');
-        return h > 0 ? `${h}:${formattedM}:${formattedS}` : `${formattedM}:${formattedS}`;
-    }
-
-    function render() {
-        const list = document.getElementById('lso-list');
-        const copyBtn = document.getElementById('lso-copy-btn');
-        list.innerHTML = '';
-        
-        // Auto-sort chronologically
-        timestamps.sort((a, b) => a.time - b.time);
-        
-        copyBtn.style.display = timestamps.length > 0 ? 'block' : 'none';
-
-        timestamps.forEach(ts => {
-            const row = document.createElement('div');
-            row.style.cssText = "display:flex; align-items:center; gap:6px; background: rgba(0,0,0,0.03); padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.05);";
-
-            const timeDisplay = document.createElement('span');
-            timeDisplay.style.cssText = "font-weight:700; font-family: ui-monospace, monospace; width:55px; font-size:13px; color:#2563eb; cursor:pointer;";
-            timeDisplay.title = "Click to jump to this time";
-            timeDisplay.textContent = formatTime(ts.time);
-            timeDisplay.onclick = () => {
-                const video = document.querySelector('.html5-main-video') || document.querySelector('video');
-                if (video) video.currentTime = ts.time;
-            };
-
-            const btnStyle = "cursor:pointer; padding:4px; background:#e2e8f0; border:none; border-radius:4px; font-weight:700; color:#334155; font-size:11px; width:28px;";
+        // Runs every time you open the extension to fetch the correct video's data
+        initForCurrentPage: function() {
+            try {
+                // Safely extract just the base video URL, ignoring timestamps like &t=5s
+                let url = new URL(window.location.href);
+                let cleanUrl = url.origin + url.pathname;
+                if (url.searchParams.has('v')) {
+                    cleanUrl += '?v=' + url.searchParams.get('v'); // Keep YouTube Video ID
+                }
+                this.pageKey = 'stamper_' + cleanUrl;
+            } catch(e) {
+                this.pageKey = 'stamper_' + window.location.href; // Fallback
+            }
             
-            const minusBtn = document.createElement('button');
-            minusBtn.style.cssText = btnStyle; minusBtn.textContent = '-1s';
-            minusBtn.onclick = () => { ts.time = Math.max(0, ts.time - 1); render(); };
+            // Load this specific video's timestamps
+            chrome.storage.local.get([this.pageKey], (result) => {
+                this.timestamps = result[this.pageKey] || [];
+                this.render();
+            });
+        },
 
-            const plusBtn = document.createElement('button');
-            plusBtn.style.cssText = btnStyle; plusBtn.textContent = '+1s';
-            plusBtn.onclick = () => { ts.time += 1; render(); };
+        saveData: function() {
+            if (this.timestamps.length > 0) {
+                chrome.storage.local.set({ [this.pageKey]: this.timestamps });
+            } else {
+                chrome.storage.local.remove(this.pageKey); // Clean up empty lists
+            }
+        },
 
-            const noteInput = document.createElement('input');
-            noteInput.style.cssText = "flex-grow:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px; color:#0f172a; font-size:13px; background:white;";
-            noteInput.placeholder = 'Note...';
-            noteInput.value = ts.note;
-            noteInput.oninput = (e) => { ts.note = e.target.value; }; 
+        formatTime: function(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            const formattedM = m.toString().padStart(2, '0');
+            const formattedS = s.toString().padStart(2, '0');
+            return h > 0 ? `${h}:${formattedM}:${formattedS}` : `${formattedM}:${formattedS}`;
+        },
+
+        render: function() {
+            const list = document.getElementById('lso-list');
+            const copyBtn = document.getElementById('lso-copy-btn');
+            list.innerHTML = '';
             
-            noteInput.onkeydown = (e) => e.stopPropagation();
-            noteInput.onkeyup = (e) => e.stopPropagation();
-            noteInput.onkeypress = (e) => e.stopPropagation();
+            this.timestamps.sort((a, b) => a.time - b.time);
+            copyBtn.style.display = this.timestamps.length > 0 ? 'block' : 'none';
 
-            const deleteBtn = document.createElement('button');
-            deleteBtn.style.cssText = "cursor:pointer; padding:4px 8px; background:#fee2e2; color:#ef4444; border:none; border-radius:4px; font-size:12px;";
-            deleteBtn.textContent = '✖';
-            deleteBtn.onclick = () => { timestamps = timestamps.filter(t => t.id !== ts.id); render(); };
+            this.timestamps.forEach(ts => {
+                const row = document.createElement('div');
+                row.style.cssText = "display:flex; align-items:center; gap:6px; background: rgba(0,0,0,0.03); padding:8px; border-radius:8px; border:1px solid rgba(0,0,0,0.05);";
 
-            row.append(timeDisplay, minusBtn, plusBtn, noteInput, deleteBtn);
-            list.appendChild(row);
-        });
-        
-        // Scroll to the bottom of the list when a new timestamp is added
-        list.scrollTop = list.scrollHeight;
-    }
+                const timeDisplay = document.createElement('span');
+                timeDisplay.style.cssText = "font-weight:700; font-family: ui-monospace, monospace; width:55px; font-size:13px; color:#2563eb; cursor:pointer;";
+                timeDisplay.textContent = this.formatTime(ts.time);
+                timeDisplay.onclick = () => {
+                    const video = document.querySelector('.html5-main-video') || document.querySelector('video');
+                    if (video) video.currentTime = ts.time;
+                };
+
+                const btnStyle = "cursor:pointer; padding:4px; background:#e2e8f0; border:none; border-radius:4px; font-weight:700; color:#334155; font-size:11px; width:28px;";
+                
+                const minusBtn = document.createElement('button');
+                minusBtn.style.cssText = btnStyle; 
+                minusBtn.textContent = '-2s'; 
+                minusBtn.onclick = () => { ts.time = Math.max(0, ts.time - 2); this.render(); this.saveData(); };
+
+                const plusBtn = document.createElement('button');
+                plusBtn.style.cssText = btnStyle; 
+                plusBtn.textContent = '+2s'; 
+                plusBtn.onclick = () => { ts.time += 2; this.render(); this.saveData(); };
+
+                const noteInput = document.createElement('input');
+                noteInput.style.cssText = "flex-grow:1; padding:6px; border:1px solid #cbd5e1; border-radius:6px; color:#0f172a; font-size:13px; background:white;";
+                noteInput.placeholder = 'Note...';
+                noteInput.value = ts.note;
+                noteInput.oninput = (e) => { ts.note = e.target.value; this.saveData(); };
+                
+                noteInput.onkeydown = (e) => e.stopPropagation();
+                noteInput.onkeyup = (e) => e.stopPropagation();
+                noteInput.onkeypress = (e) => e.stopPropagation();
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.style.cssText = "cursor:pointer; padding:4px 8px; background:#fee2e2; color:#ef4444; border:none; border-radius:4px; font-size:12px;";
+                deleteBtn.textContent = '✖';
+                deleteBtn.onclick = () => { this.timestamps = this.timestamps.filter(t => t.id !== ts.id); this.render(); this.saveData(); };
+
+                row.append(timeDisplay, minusBtn, plusBtn, noteInput, deleteBtn);
+                list.appendChild(row);
+            });
+            list.scrollTop = list.scrollHeight;
+        }
+    };
 
     // 4. Button Listeners
     document.getElementById('lso-close-btn').addEventListener('click', () => {
@@ -174,24 +200,26 @@ if (!document.getElementById('livestream-stamper-overlay')) {
 
     document.getElementById('lso-clear-btn').addEventListener('click', () => {
         if(confirm("Clear all timestamps?")) {
-            timestamps = [];
-            render();
+            window.stamperPro.timestamps = [];
+            window.stamperPro.render();
+            chrome.storage.local.remove(window.stamperPro.pageKey);
         }
     });
 
     document.getElementById('lso-capture-btn').addEventListener('click', () => {
         const video = document.querySelector('.html5-main-video') || document.querySelector('video');
         if (video) {
-            timestamps.push({ id: Date.now(), time: video.currentTime, note: '' });
-            render();
+            window.stamperPro.timestamps.push({ id: Date.now(), time: video.currentTime, note: '' });
+            window.stamperPro.render();
+            window.stamperPro.saveData();
         } else {
             alert("No playing video found on this page.");
         }
     });
 
     document.getElementById('lso-copy-btn').addEventListener('click', (e) => {
-        if (timestamps.length === 0) return;
-        const text = timestamps.map(ts => `${formatTime(ts.time)}${ts.note ? ` - ${ts.note}` : ''}`).join('\n');
+        if (window.stamperPro.timestamps.length === 0) return;
+        const text = window.stamperPro.timestamps.map(ts => `${window.stamperPro.formatTime(ts.time)}${ts.note ? ` - ${ts.note}` : ''}`).join('\n');
         navigator.clipboard.writeText(text).then(() => {
             const btn = e.target;
             const originalText = btn.textContent;
@@ -204,8 +232,13 @@ if (!document.getElementById('livestream-stamper-overlay')) {
         });
     });
 
+    // Initialize for the first time
+    window.stamperPro.initForCurrentPage();
+
 } else {
-    // Toggle visibility
+    // If the overlay is already injected, but the user clicked the extension icon again
+    // We re-check the URL to see if they changed videos, load that data, and show the window
+    window.stamperPro.initForCurrentPage();
     const container = document.getElementById('livestream-stamper-overlay');
     container.style.display = (container.style.display === 'none') ? 'flex' : 'none';
 }
