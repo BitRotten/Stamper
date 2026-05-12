@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Stamper Pro",
-  "version": "2.1",
+  "version": "2.3",
   "description": "Floating timestamp tool directly on the video page. Capture, fine-tune, and copy timestamps for comments.",
   "action": {},
   "icons": {
@@ -14,6 +14,7 @@
   },
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ]
 }
